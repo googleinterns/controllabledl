@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+
+.ipynb_checkpoints/
+img/
+data/
+
+/pendulum-system/saved_models/**
+/m5-forecasting/data/**
+/healthcare/saved_models/**
