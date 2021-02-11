@@ -15,9 +15,6 @@ limitations under the License.
 from __future__ import division
 from __future__ import print_function
 
-import sys
-sys.path.append('..')
-
 import os
 import random
 from copy import deepcopy
@@ -29,22 +26,19 @@ import numpy as np
 from sklearn.preprocessing import OneHotEncoder, Normalizer, StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
 from sklearn.utils import shuffle
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-
 from torch.utils.data import DataLoader, TensorDataset
 from torch.distributions.beta import Beta
 
-
-# from model import RuleEncoder, DataEncoder, Net, NaiveModel, SharedNet, DataonlyNet
 from model import RuleEncoder, DataEncoder, Net
 from utils_learning import verification, get_perturbed_input
 from utils_cardio import *
-
 
 
 model_info = {'dataonly': {'rule': 0.0},
@@ -53,16 +47,19 @@ model_info = {'dataonly': {'rule': 0.0},
               'ours-beta0.1-scale0.1': {'beta': [0.1], 'scale': 0.1},
               'ours-beta0.1-scale0.01': {'beta': [0.1], 'scale': 0.01},
               'ours-beta0.1-scale0.05': {'beta': [0.1], 'scale': 0.05},
+              'ours-beta0.1-pert0.001': {'beta': [0.1], 'pert': 0.001},
+              'ours-beta0.1-pert0.01': {'beta': [0.1], 'pert': 0.01},
+              'ours-beta0.1-pert0.1': {'beta': [0.1], 'pert': 0.1},
+              'ours-beta0.1-pert1.0': {'beta': [0.1], 'pert': 1.0},
              }
 
 
 def main():
   parser = ArgumentParser()
-  # train/test hyper parameters
   parser.add_argument('--datapath', type=str, default='data/cardio_train.csv')
   parser.add_argument('--rule_threshold', type=float, default=129.5)
-  parser.add_argument('--src_rule_ratio', type=float, default=0.3)
-  parser.add_argument('--src_norule_ratio', type=float, default=0.7)
+  parser.add_argument('--src_usual_ratio', type=float, default=0.3)
+  parser.add_argument('--src_unusual_ratio', type=float, default=0.7)
   parser.add_argument('--seed', type=int, default=42)
   parser.add_argument('--device', type=str, default='cuda:0')
   parser.add_argument('--target_rule_ratio', type=float, default=0.7)
@@ -132,66 +129,48 @@ def main():
   rule_ind = args.rule_ind
   rule_feature = 'ap_hi'
 
-  low_ap_negative = (df[rule_feature] <= rule_threshold) & (df['cardio'] == 0)    # rule
-  high_ap_positive = (df[rule_feature] > rule_threshold) & (df['cardio'] == 1)    # rule
-  low_ap_positive = (df[rule_feature] <= rule_threshold) & (df['cardio'] == 1)    # opposite rule
-  high_ap_negative = (df[rule_feature] > rule_threshold) & (df['cardio'] == 0)    # opposite rule
+  low_ap_negative = (df[rule_feature] <= rule_threshold) & (df['cardio'] == 0)    # usual
+  high_ap_positive = (df[rule_feature] > rule_threshold) & (df['cardio'] == 1)    # usual
+  low_ap_positive = (df[rule_feature] <= rule_threshold) & (df['cardio'] == 1)    # unusual
+  high_ap_negative = (df[rule_feature] > rule_threshold) & (df['cardio'] == 0)    # unusual
 
-  # Samples following a rule
-  X_rule = X[low_ap_negative | high_ap_positive]
-  y_rule = y[low_ap_negative | high_ap_positive]
-  y_rule = y_rule.to_numpy()
-  X_rule, y_rule = shuffle(X_rule, y_rule, random_state=0)
-  num_rule_samples = X_rule.shape[0]
+  # Samples in Usual group
+  X_usual = X[low_ap_negative | high_ap_positive]
+  y_usual = y[low_ap_negative | high_ap_positive]
+  y_usual = y_usual.to_numpy()
+  X_usual, y_usual = shuffle(X_usual, y_usual, random_state=0)
+  num_usual_samples = X_usual.shape[0]
 
-  # Samples NOT following a rule
-  X_norule = X[low_ap_positive | high_ap_negative]
-  y_norule = y[low_ap_positive | high_ap_negative]
-  y_norule = y_norule.to_numpy()
-  X_norule, y_norule = shuffle(X_norule, y_norule, random_state=0)
-  num_norule_samples = X_norule.shape[0]
+  # Samples in Unusual group
+  X_unusual = X[low_ap_positive | high_ap_negative]
+  y_unusual = y[low_ap_positive | high_ap_negative]
+  y_unusual = y_unusual.to_numpy()
+  X_unusual, y_unusual = shuffle(X_unusual, y_unusual, random_state=0)
+  num_unusual_samples = X_unusual.shape[0]
 
   # Build a source dataset
-  src_rule_ratio = args.src_rule_ratio
-  src_norule_ratio = args.src_norule_ratio
-  num_samples_from_norule = int(src_norule_ratio*num_norule_samples)
-  num_samples_from_rule = int(num_samples_from_norule*src_rule_ratio / (1-src_rule_ratio))
+  src_usual_ratio = args.src_usual_ratio
+  src_unusual_ratio = args.src_unusual_ratio
+  num_samples_from_unusual = int(src_unusual_ratio * num_unusual_samples)
+  num_samples_from_usual = int(num_samples_from_unusual * src_usual_ratio / (1-src_usual_ratio))
 
-  X_src = np.concatenate((X_rule[:num_samples_from_rule], X_norule[:num_samples_from_norule]), axis=0)
-  y_src = np.concatenate((y_rule[:num_samples_from_rule], y_norule[:num_samples_from_norule]), axis=0)
+  X_src = np.concatenate((X_usual[:num_samples_from_usual], X_unusual[:num_samples_from_unusual]), axis=0)
+  y_src = np.concatenate((y_usual[:num_samples_from_usual], y_unusual[:num_samples_from_unusual]), axis=0)
   print()
   print("Source dataset statistics:")
-  print("# of samples following a rule: {}".format(num_samples_from_rule))
-  print("# of samples NOT following a rule: {}".format(num_samples_from_norule))
-  print("Rule ratio: {:.2f}%".format(100*num_samples_from_rule/(X_src.shape[0])))
-
-  # Build a target dataset
-  target_rule_ratio = args.target_rule_ratio
-  num_samples_from_norule_for_target = X_norule.shape[0] - num_samples_from_norule
-  num_samples_from_rule_for_target = int(num_samples_from_norule_for_target*target_rule_ratio / (1-target_rule_ratio))
-  X_target = np.concatenate((X_rule[num_samples_from_rule:num_samples_from_rule+num_samples_from_rule_for_target], 
-                             X_norule[num_samples_from_norule:]), axis=0)
-  y_target = np.concatenate((y_rule[num_samples_from_rule:num_samples_from_rule+num_samples_from_rule_for_target], 
-                             y_norule[num_samples_from_norule:]), axis=0)
-  print()
-  print("Target dataset statistics:")
-  print("# of samples following a rule: {}".format(num_samples_from_rule_for_target))
-  print("# of samples NOT following a rule: {}".format(num_samples_from_norule_for_target))
-  print("Rule ratio: {:.2f}%".format(100*num_samples_from_rule_for_target/(X_target.shape[0])))
+  print("# of samples in Usual group: {}".format(num_samples_from_usual))
+  print("# of samples in Unusual group: {}".format(num_samples_from_unusual))
+  print("Usual ratio: {:.2f}%".format(100 * num_samples_from_usual / (X_src.shape[0])))
 
   train_ratio = args.train_ratio
   validation_ratio = args.validation_ratio
   test_ratio = args.test_ratio
-  train_X, test_X, train_y, test_y = train_test_split(X_src, y_src, test_size=1-train_ratio, random_state=seed)
-  valid_X, test_X, valid_y, test_y = train_test_split(test_X, test_y, test_size=test_ratio/(test_ratio + validation_ratio), random_state=seed)
+  train_X, test_X, train_y, test_y = train_test_split(X_src, y_src, test_size=1 - train_ratio, random_state=seed)
+  valid_X, test_X, valid_y, test_y = train_test_split(test_X, test_y, test_size=test_ratio / (test_ratio + validation_ratio), random_state=seed)
 
   train_X, train_y = torch.tensor(train_X, dtype=torch.float32, device=device), torch.tensor(train_y, dtype=torch.float32, device=device)
   valid_X, valid_y = torch.tensor(valid_X, dtype=torch.float32, device=device), torch.tensor(valid_y, dtype=torch.float32, device=device)
   test_X, test_y = torch.tensor(test_X, dtype=torch.float32, device=device), torch.tensor(test_y, dtype=torch.float32, device=device)
-
-  total_train_sample = len(train_X)
-  total_valid_sample = len(valid_X)
-  total_test_sample = len(test_X)
 
   batch_size = args.batch_size
   train_loader = DataLoader(TensorDataset(train_X, train_y), batch_size=batch_size, shuffle=True)
@@ -244,7 +223,7 @@ def main():
   counter_early_stopping = 1
   valid_freq = args.valid_freq  
 
-  saved_filename = 'cardio_{}_rule-{}_src{}-target{}_seed{}.demo.pt'.format(model_type, rule_feature, src_rule_ratio, target_rule_ratio, seed)
+  saved_filename = 'cardio_{}_rule-{}_src{}-target{}_seed{}.demo.pt'.format(model_type, rule_feature, src_usual_ratio, src_usual_ratio, seed)
   saved_filename =  os.path.join('saved_models', saved_filename)
   print('saved_filename: {}\n'.format(saved_filename))
   best_val_loss = float('inf')
@@ -274,7 +253,7 @@ def main():
 
       loss_rule = loss_rule_func(output, pert_output)    # output should be less than pert_output
 
-      loss = alpha * loss_rule + scale * (1-alpha) * loss_task
+      loss = alpha * loss_rule + scale * (1 - alpha) * loss_task
 
       loss.backward()
       optimizer.step()
@@ -307,7 +286,7 @@ def main():
           y_true = val_y.cpu().numpy()
           y_score = output.cpu().numpy()
           y_pred = np.round(y_score)
-          val_acc = 100*accuracy_score(y_true, y_pred)
+          val_acc = 100 * accuracy_score(y_true, y_pred)
 
         if val_loss < best_val_loss:
           counter_early_stopping = 1

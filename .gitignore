@@ -6,5 +6,11 @@ img/
 data/
 
 /pendulum-system/saved_models/**
-/m5-forecasting/data/**
+/m5-forecasting/saved_models/**
 /healthcare/saved_models/**
+
+
+/pendulum-system/data/**
+/m5-forecasting/data/**
+/healthcare/data/**
+/healthcare/data

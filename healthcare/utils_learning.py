@@ -30,4 +30,4 @@ def get_perturbed_input(input_tensor, pert_coeff):
     return input_tensor + input_tensor*pert_coeff*torch.rand()
     '''
     device = input_tensor.device
-    return input_tensor + input_tensor*pert_coeff*torch.rand(input_tensor.shape, device=device)
+    return input_tensor + torch.abs(input_tensor)*pert_coeff*torch.rand(input_tensor.shape, device=device)
