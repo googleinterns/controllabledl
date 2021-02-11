@@ -1,3 +1,17 @@
+'''Copyright 2020 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+'''
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,7 +25,6 @@ class RuleEncoder(nn.Module):
     self.output_dim = output_dim
     self.hidden_dim = hidden_dim
     self.net = nn.Sequential(nn.Linear(input_dim, hidden_dim),
-#                              nn.BatchNorm1d(hidden_dim),
                              nn.ReLU(),
                              nn.Linear(hidden_dim, hidden_dim),
                              nn.ReLU(),
@@ -29,7 +42,6 @@ class DataEncoder(nn.Module):
     self.output_dim = output_dim
     self.hidden_dim = hidden_dim
     self.net = nn.Sequential(nn.Linear(input_dim, hidden_dim),
-#                              nn.BatchNorm1d(hidden_dim),
                              nn.ReLU(),
                              nn.Linear(hidden_dim, hidden_dim),
                              nn.ReLU(),
@@ -45,13 +57,6 @@ class M5Net(nn.Module):
     self.data_info = data_info
     self.name_to_ind = name_to_ind
     self.emb_dict = nn.ModuleDict()
-#     for key, val in data_info.items():
-#       if key == 'dense1':
-#         continue
-#       if key == 'item_id':
-#         self.emb_dict[key] = nn.Embedding(val, 3)
-#       else:
-#         self.emb_dict[key] = nn.Embedding(val, 1)
 
     self.rule_encoder = rule_encoder
     self.data_encoder = data_encoder
@@ -66,9 +71,7 @@ class M5Net(nn.Module):
   def forward(self, x, alpha=0.0, merge='cat'):
     # merge: cat or add
     input_dense_cat = [x[self.name_to_ind['dense1']]]    # index 0 is 'dense1'
-#     for key, emb_layer in self.emb_dict.items():
-#       input_dense_cat.append(emb_layer(x[self.name_to_ind[key]]))
-    x = torch.cat(input_dense_cat, dim=-1)    # (batch, 12+3+1+1+1+1=19)
+    x = torch.cat(input_dense_cat, dim=-1)
 
     rule_z = self.rule_encoder(x)
     data_z = self.data_encoder(x)
