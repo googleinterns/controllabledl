@@ -18,6 +18,27 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class InequalityDual(nn.Module):
+  def __init__(self, in_features):
+    super(InequalityDual, self).__init__()
+    self.in_features = in_features
+    self.weight = nn.Parameter(torch.randn(in_features).abs_())
+
+  def forward(self, x):
+    # Inequality dual variables are always positive
+    self.weight.data.clamp_(min=0.0)
+    return x * self.weight
+
+class EqualityDual(nn.Module):
+  def __init__(self, in_features):
+    super(EqualityDual, self).__init__()
+    self.in_features = in_features
+    self.weight = nn.Parameter(torch.randn(in_features))
+
+  def forward(self, x):
+    return x * self.weight
+
+
 class NaiveModel(nn.Module):
   def __init__(self):
     super(NaiveModel, self).__init__()

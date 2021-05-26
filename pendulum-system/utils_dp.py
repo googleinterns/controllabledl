@@ -188,7 +188,7 @@ def calc_double_E(y, **kwargs):
                                       2*L1*L2*th1d*th2d*np.cos(th1-th2))
   elif isinstance(y, torch.Tensor):
     V = -(M1+M2)*L1*g*torch.cos(th1) - M2*L2*g*torch.cos(th2) + M1*g*L1 + M2*g*(L1+L2)
-    T = 0.5*M1*(L1*th1d)**2 + 0.5*M2*((L1*th1d)**2 + (L2*th2d)**2 +
+    T = 0.5*M1*torch.square(L1*th1d) + 0.5*M2*(torch.square(L1*th1d) + torch.square(L2*th2d) +
                                       2*L1*L2*th1d*th2d*torch.cos(th1-th2))
   else:
     raise TypeError("type of y is :{}. It should be numpy.ndarray or torch.Tensor".format(type(y)))

@@ -34,19 +34,7 @@ from torch.distributions.beta import Beta
 
 from utils_dp import DoublePendulum, calc_double_E, verification
 
-from model import RuleEncoder, DataEncoder, Net, NaiveModel, SharedNet, DataonlyNet
-
-
-model_info = {'ruleonly': {},
-              'dataonly': {},
-              'dataonly-nobatch': {},
-              'dataonly-nobatch-constraint1.0': {'constraint': 1.0},
-              'dataonly-nobatch-constraint0.1': {'constraint': 0.1},
-              'dataonly-nobatch-constraint0.01': {'constraint': 0.01},
-              'ours-shared-test1': {'beta': [0.1], 'scale': 0, 'shared': True},
-              'dnn-crr': {'beta': [0.1], 'scale': 1, 'shared': True},
-              'dnn-crr-autoscale': {'beta': [0.1], 'scale': 0, 'shared': True}
-             }
+from model import RuleEncoder, DataEncoder, Net, NaiveModel, SharedNet, DataonlyNet, InequalityDual
 
 
 def main():
@@ -67,16 +55,16 @@ def main():
   parser.add_argument('--sampling_step', type=int, default=20, help='Sampling timesteps')
   parser.add_argument('--device', type=str, default='cuda:0')
   parser.add_argument('--batch_size', type=int, default=64, help='default: 64')
-  parser.add_argument('--model_type', type=str, default='dataonly', help='dataonly, ours, ruleonly. default:dataonly')
   parser.add_argument('--seed', type=int, default=42)
   parser.add_argument('--input_dim_encoder', type=int, default=16)
   parser.add_argument('--output_dim_encoder', type=int, default=64)
   parser.add_argument('--hidden_dim_encoder', type=int, default=64)
   parser.add_argument('--hidden_dim_db', type=int, default=64)
   parser.add_argument('--n_layers', type=int, default=2)
-  parser.add_argument('--epochnum', type=int, default=1000, help='default: 1000')
+  parser.add_argument('--epochnum', type=int, default=10000, help='default: 1000')
   parser.add_argument('--early_stopping_thld', type=int, default=10, help='default: 10')
   parser.add_argument('--valid_freq', type=int, default=5, help='default: 5')
+  parser.add_argument('--dual_lr', type=float, default=1.0, help='default: 1.0')
 
   args = parser.parse_args()
   print(args)
@@ -144,30 +132,12 @@ def main():
   print("data size: {}/{}/{}".format(len(train_X), len(valid_X), len(test_X)))
 
   # Start
-  model_type = args.model_type
-  if model_type not in model_info:
-    lr = 0.001
-    shared = False
-    constraint = 0.0
-    scale = 1.0
-    beta_param = [1.0]
-    alpha_distribution = Beta(float(beta_param[0]), float(beta_param[0]))
-    model_params = {}
+  lr = 0.001
+  dual_lr = args.dual_lr
+  seed=42
 
-  else:
-    model_params = model_info[model_type]
-    lr = model_params['lr'] if 'lr' in model_params else 0.001
-    shared = model_params['shared'] if 'shared' in model_params else False
-    constraint = model_params['constraint'] if 'constraint' in model_params else 0.0
-    scale = model_params['scale'] if 'scale' in model_params else 1.0
-    beta_param = model_params['beta'] if 'beta' in model_params else [1.0]
-    if len(beta_param) == 1:
-      alpha_distribution = Beta(float(beta_param[0]), float(beta_param[0]))
-    elif len(beta_param) == 2:
-      alpha_distribution = Beta(float(beta_param[0]), float(beta_param[1]))
-
-  print('model_type: {}\tscale:{}\tBeta distribution: Beta({})\tlr: {}, constraint: {}, seed: {}'
-        .format(model_type, scale, beta_param, lr, constraint, seed))
+  print('model_type: {}, lr: {}, dual_lr: {}, seed: {}'
+        .format('ldcdl', lr, dual_lr, seed))
 
   random.seed(seed)
   np.random.seed(seed)
@@ -178,12 +148,7 @@ def main():
   torch.backends.cudnn.benchmark = False
 
   SKIP = True    # Delta value (x(t+1)-x(t)) prediction if True else absolute value (x(t+1)) prediction
-  if model_type.startswith('dataonly'):
-    merge = 'cat'
-  elif model_type.startswith('ruleonly'):
-    merge = 'cat'
-  elif model_type.startswith('ours') or model_type.startswith('dnn-crr'):
-    merge = 'cat'
+  merge = 'cat'
 
 #   input_dim = 4
   input_dim_encoder = args.input_dim_encoder
@@ -193,33 +158,27 @@ def main():
   output_dim = input_dim
   n_layers = args.n_layers
 
-  if shared:
-    rule_encoder = RuleEncoder(input_dim_encoder, output_dim_encoder, hidden_dim=hidden_dim_encoder)
-    data_encoder = DataEncoder(input_dim_encoder, output_dim_encoder, hidden_dim=hidden_dim_encoder)
-    model = SharedNet(input_dim, output_dim, rule_encoder, data_encoder, hidden_dim=hidden_dim_db, n_layers=n_layers, merge=merge, skip=SKIP).to(device)    # delta value prediction
-  else:
-    rule_encoder = RuleEncoder(input_dim, output_dim_encoder, hidden_dim=hidden_dim_encoder)
-    data_encoder = DataEncoder(input_dim, output_dim_encoder, hidden_dim=hidden_dim_encoder)
-    if model_type.startswith('dataonly'):
-      model = DataonlyNet(input_dim, output_dim, data_encoder, hidden_dim=hidden_dim_db, n_layers=n_layers, skip=SKIP).to(device)
-    else:
-      model = Net(input_dim, output_dim, rule_encoder, data_encoder, hidden_dim=hidden_dim_db, n_layers=n_layers, merge=merge, skip=SKIP).to(device)    # delta value prediction
+  rule_encoder = RuleEncoder(input_dim, output_dim_encoder, hidden_dim=hidden_dim_encoder)
+  data_encoder = DataEncoder(input_dim, output_dim_encoder, hidden_dim=hidden_dim_encoder)
+  model = DataonlyNet(input_dim, output_dim, data_encoder, hidden_dim=hidden_dim_db, n_layers=n_layers, skip=SKIP).to(device)
+  dual = InequalityDual(1).to(device)
 
   total_params = sum(p.numel() for p in model.parameters())
   print("total parameters: {}".format(total_params))
 
-  loss_rule_func = lambda x,y: torch.mean(F.relu(x-y))    # if x>y, penalize it.
+  # Dual loss enforces x-y <= 0.
+  loss_dual_func = lambda x: torch.mean(x)
   loss_task_func = nn.L1Loss()    # return scalar (reduction=mean)
   l1_func = nn.L1Loss()
-  best_val_loss = float('inf')
   optimizer = optim.Adam(model.parameters(), lr=lr)
+  dual_optimizer = optim.SGD(dual.parameters(), lr=dual_lr)
 
   epochnum = args.epochnum
   early_stopping_thld = args.early_stopping_thld
   counter_early_stopping = 1
   valid_freq = args.valid_freq
-  saved_filename = 'dp-{}_{:.4f}_{:.1f}_{:.4f}_{:.1f}-seed{}.skip.demo.pt' \
-                          .format(model_type, init_theta1, init_omega1, init_theta2, init_omega2, seed)
+  saved_filename = 'dp-model_{:.4f}_{:.1f}_{:.4f}_{:.1f}_{}-seed{}.pt' \
+                          .format(init_theta1, init_omega1, init_theta2, init_omega2, dual_lr, seed)
 
   saved_filename =  os.path.join('saved_models', saved_filename)
   print('saved_filename: {}\n'.format(saved_filename))
@@ -227,46 +186,46 @@ def main():
   # Training
   for epoch in range(1, epochnum+1):
     model.train()
+    dual.train()
+    train_loss_task = 0
+    train_loss_dual = 0
+    train_ratio = 0
     for batch_idx, batch_data in enumerate(train_loader):
       batch_train_x = batch_data[0] + 0.01*torch.randn(batch_data[0].shape).to(device)    # Adding noise
       batch_train_y = batch_data[1]
 
+      # Primal optimization
       optimizer.zero_grad()
-
-      if model_type.startswith('dataonly'):
-        alpha = 0.0
-      elif model_type.startswith('ruleonly'):
-        alpha = 1.0
-      elif model_type.startswith('ours') or model_type.startswith('dnn-crr'):
-        alpha = alpha_distribution.sample().item()
-
+      alpha = 0.0
       output = model(batch_train_x, alpha=alpha)
-
       _, _, curr_E = calc_double_E(batch_train_x, **dp_params)    # E(X_t)    Energy of X_t (Current energy)
       _, _, next_E = calc_double_E(batch_train_y, **dp_params)    # E(X_{t+1})    Energy of X_{t+1} (Next energy from ground truth)
       _, _, pred_E = calc_double_E(output, **dp_params)    # E(\hat{X}_t+1)    Energy of \hat{X}_{t+1} (Next energy from prediction)
-
       loss_task = loss_task_func(output, batch_train_y)    # state prediction
-      loss_rule = loss_rule_func(pred_E, curr_E)    # energy damping by friction: E_{t+1}<=E_t
+      loss_dual = loss_dual_func(dual(torch.reshape(pred_E-curr_E, (-1, 1))))
       loss_mae = l1_func(output, batch_train_y).item()
-
-      if constraint:
-        loss = loss_task + constraint*loss_rule    # Constrained baseline
-      else:
-        if scale == 0:
-          scale = loss_rule.item() / loss_task.item()
-          print('scale is updated: {}'.format(scale))
-        loss = alpha * loss_rule + scale * (1-alpha) * loss_task
-
+      loss = loss_task + loss_dual    # Constrained baseline
       loss.backward()
       optimizer.step()
+
+      # Dual optimization
+      dual_optimizer.zero_grad()
+      # Can detatch because dual prameters are not produced through energy functions
+      dual_loss = -loss_dual_func(dual(torch.reshape(pred_E.detach()-curr_E.detach(), (-1, 1))))
+      dual_loss.backward()
+      dual_optimizer.step()
+
+      train_loss_task += loss_task * batch_train_x.shape[0] / total_train_sample
+      train_loss_dual += loss_dual * batch_train_x.shape[0] / total_train_sample
+      train_ratio += verification(curr_E, pred_E, threshold=0.0).item() * batch_train_x.shape[0] / total_train_sample
 
     # Evaluate on validation set
     if epoch % valid_freq == 0:
       model.eval()
+      dual.eval()
       with torch.no_grad():
         val_loss_task = 0
-        val_loss_rule = 0
+        val_loss_dual = 0
         val_ratio = 0
         for val_x, val_y in valid_loader:
           val_x += 0.01*torch.randn(val_x.shape).to(device)
@@ -275,34 +234,23 @@ def main():
           _, _, pred_E = calc_double_E(output, **dp_params)
 
           val_loss_task += (loss_task_func(output, val_y).item() * val_x.shape[0] / total_valid_sample)
-          val_loss_rule += (loss_rule_func(pred_E, curr_E) * val_x.shape[0] / total_valid_sample)
+          val_loss_dual += (loss_dual_func(dual(torch.reshape(pred_E-curr_E, (-1, 1)))) * val_x.shape[0] / total_valid_sample)
           val_ratio += (verification(curr_E, pred_E, threshold=0.0).item() * val_x.shape[0] / total_valid_sample)
-
-        print('[Valid] Epoch: {} Loss(Task): {:.6f} Loss(Rule): {:.6f}  Ratio(Rule): {:.3f} (alpha: 0.0)\t best model is updated %%%%'
-              .format(epoch, best_val_loss, val_loss_rule, val_ratio))
+        print('[Train] Epoch: {} Loss(Task): {:.6f} Loss(Dual): {:.6f}  Ratio(Rule): {:.3f} (alpha: 0.0)'
+              .format(epoch, train_loss_task, train_loss_dual, train_ratio))
+        print('[Valid] Epoch: {} Loss(Task): {:.6f} Loss(Dual): {:.6f}  Ratio(Rule): {:.3f} (alpha: 0.0)\t best model is updated %%%%'
+              .format(epoch, val_loss_task, val_loss_dual, val_ratio))
         torch.save({
           'epoch': epoch,
           'model_state_dict':model.state_dict(),
+          'dual_state_dict':dual.state_dict(),
           'optimizer_state_dict': optimizer.state_dict(),
-          'loss': best_val_loss
+          'dual_optimizer_state_dict': dual_optimizer.state_dict(),
+          'loss': val_loss_task
         }, saved_filename)
 
   # Test
-  if shared:
-    rule_encoder = RuleEncoder(input_dim_encoder, output_dim_encoder, hidden_dim=hidden_dim_encoder)
-    data_encoder = DataEncoder(input_dim_encoder, output_dim_encoder, hidden_dim=hidden_dim_encoder)
-    model_eval = SharedNet(input_dim, output_dim, rule_encoder, data_encoder, hidden_dim=hidden_dim_db, n_layers=n_layers, merge=merge, skip=SKIP).to(device)    # delta value prediction
-  else:
-    rule_encoder = RuleEncoder(input_dim, output_dim_encoder, hidden_dim=hidden_dim_encoder)
-    data_encoder = DataEncoder(input_dim, output_dim_encoder, hidden_dim=hidden_dim_encoder)
-    if model_type.startswith('dataonly'):
-      model_eval = DataonlyNet(input_dim, output_dim, data_encoder, hidden_dim=hidden_dim_db, n_layers=n_layers, skip=SKIP).to(device)
-    else:
-      model_eval = Net(input_dim, output_dim, rule_encoder, data_encoder, hidden_dim=hidden_dim_db, n_layers=n_layers, merge=merge, skip=SKIP).to(device)    # delta value prediction
-
-  checkpoint = torch.load(saved_filename)
-  model_eval.load_state_dict(checkpoint['model_state_dict'])
-  print("best model loss: {:.6f}\t at epoch: {}".format(checkpoint['loss'], checkpoint['epoch']))
+  model_eval = model
 
   model_eval.eval()
   with torch.no_grad():
@@ -314,19 +262,14 @@ def main():
   print('\nTest set: Average loss: {:.8f}\n'.format(test_loss_task))
 
   # Best model
-  alphas = [0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]
+  alphas = [0.0]
   for alpha in alphas:
     model_eval.eval()
     with torch.no_grad():
       test_loss_task, test_ratio = 0, 0
       for test_x, test_y in test_loader:
 
-        if model_type.startswith('dataonly'):
-          output = model_eval(test_x, alpha=0.0)
-        elif model_type.startswith('ruleonly'):
-          output = model_eval(test_x, alpha=1.0)
-        elif model_type.startswith('ours') or model_type.startswith('dnn-crr'):
-          output = model_eval(test_x, alpha=alpha)
+        output = model_eval(test_x, alpha=0.0)
 
         test_loss_task += (loss_task_func(output, test_y).item() * test_x.shape[0] / total_test_sample)  # sum up batch loss
 
