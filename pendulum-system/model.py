@@ -29,6 +29,7 @@ class InequalityDual(nn.Module):
     self.weight.data.clamp_(min=0.0)
     return x * self.weight
 
+
 class EqualityDual(nn.Module):
   def __init__(self, in_features):
     super(EqualityDual, self).__init__()

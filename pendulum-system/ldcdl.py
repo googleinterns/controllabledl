@@ -61,8 +61,8 @@ def main():
   parser.add_argument('--hidden_dim_encoder', type=int, default=64)
   parser.add_argument('--hidden_dim_db', type=int, default=64)
   parser.add_argument('--n_layers', type=int, default=2)
-  parser.add_argument('--epochnum', type=int, default=10000, help='default: 1000')
-  parser.add_argument('--early_stopping_thld', type=int, default=10, help='default: 10')
+  parser.add_argument('--epochnum', type=int, default=200, help='default: 200')
+  parser.add_argument('--early_stopping_thld', type=int, default=0, help='default: 0 (disabled)')
   parser.add_argument('--valid_freq', type=int, default=5, help='default: 5')
   parser.add_argument('--dual_lr', type=float, default=1.0, help='default: 1.0')
 
@@ -170,6 +170,7 @@ def main():
   loss_dual_func = lambda x: torch.mean(x)
   loss_task_func = nn.L1Loss()    # return scalar (reduction=mean)
   l1_func = nn.L1Loss()
+  best_val_task = float('inf')
   optimizer = optim.Adam(model.parameters(), lr=lr)
   dual_optimizer = optim.SGD(dual.parameters(), lr=dual_lr)
 
@@ -177,8 +178,8 @@ def main():
   early_stopping_thld = args.early_stopping_thld
   counter_early_stopping = 1
   valid_freq = args.valid_freq
-  saved_filename = 'dp-model_{:.4f}_{:.1f}_{:.4f}_{:.1f}_{}-seed{}.pt' \
-                          .format(init_theta1, init_omega1, init_theta2, init_omega2, dual_lr, seed)
+  saved_filename = 'dp-model_{:.4f}_{:.1f}_{:.4f}_{:.1f}_{}_{}_{}-seed{}.pt' \
+                          .format(init_theta1, init_omega1, init_theta2, init_omega2, dual_lr, early_stopping_thld, epochnum, seed)
 
   saved_filename =  os.path.join('saved_models', saved_filename)
   print('saved_filename: {}\n'.format(saved_filename))
@@ -238,19 +239,48 @@ def main():
           val_ratio += (verification(curr_E, pred_E, threshold=0.0).item() * val_x.shape[0] / total_valid_sample)
         print('[Train] Epoch: {} Loss(Task): {:.6f} Loss(Dual): {:.6f}  Ratio(Rule): {:.3f} (alpha: 0.0)'
               .format(epoch, train_loss_task, train_loss_dual, train_ratio))
-        print('[Valid] Epoch: {} Loss(Task): {:.6f} Loss(Dual): {:.6f}  Ratio(Rule): {:.3f} (alpha: 0.0)\t best model is updated %%%%'
-              .format(epoch, val_loss_task, val_loss_dual, val_ratio))
-        torch.save({
-          'epoch': epoch,
-          'model_state_dict':model.state_dict(),
-          'dual_state_dict':dual.state_dict(),
-          'optimizer_state_dict': optimizer.state_dict(),
-          'dual_optimizer_state_dict': dual_optimizer.state_dict(),
-          'loss': val_loss_task
-        }, saved_filename)
+        if early_stopping_thld > 0:
+          if val_loss_task < best_val_task:
+            counter_early_stopping = 1
+            best_val_task = val_loss_task
+            print('[Valid] Epoch: {} Loss(Task): {:.6f} Loss(Dual): {:.6f}  Ratio(Rule): {:.3f} (alpha: 0.0)\t best model is updated %%%%'
+                  .format(epoch, val_loss_task, val_loss_dual, val_ratio))
+            torch.save({
+              'epoch': epoch,
+              'model_state_dict':model.state_dict(),
+              'dual_state_dict':dual.state_dict(),
+              'optimizer_state_dict': optimizer.state_dict(),
+              'dual_optimizer_state_dict': dual_optimizer.state_dict(),
+              'loss': val_loss_task
+            }, saved_filename)
+          else:
+            print('[Valid] Epoch: {} Loss(Task): {:.6f} Loss(Dual): {:.6f}  Ratio(Rule): {:.3f} (alpha: 0.0) ({}/{})'
+                  .format(epoch, val_loss_task, val_loss_dual, val_ratio, counter_early_stopping, early_stopping_thld))
+            if counter_early_stopping >= early_stopping_thld:
+              break
+            else:
+              counter_early_stopping += 1
+        else:
+          print('[Valid] Epoch: {} Loss(Task): {:.6f} Loss(Dual): {:.6f}  Ratio(Rule): {:.3f} (alpha: 0.0)\t best model is updated %%%%'
+                .format(epoch, val_loss_task, val_loss_dual, val_ratio))
+          torch.save({
+            'epoch': epoch,
+            'model_state_dict':model.state_dict(),
+            'dual_state_dict':dual.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'dual_optimizer_state_dict': dual_optimizer.state_dict(),
+            'loss': val_loss_task
+          }, saved_filename)
 
   # Test
-  model_eval = model
+  rule_encoder_eval = RuleEncoder(input_dim, output_dim_encoder, hidden_dim=hidden_dim_encoder)
+  data_encoder_eval = DataEncoder(input_dim, output_dim_encoder, hidden_dim=hidden_dim_encoder)
+  model_eval = DataonlyNet(input_dim, output_dim, data_encoder_eval, hidden_dim=hidden_dim_db, n_layers=n_layers, skip=SKIP).to(device)
+  dual_eval = InequalityDual(1).to(device)
+
+  checkpoint = torch.load(saved_filename)
+  model_eval.load_state_dict(checkpoint['model_state_dict'])
+  dual_eval.load_state_dict(checkpoint['dual_state_dict'])
 
   model_eval.eval()
   with torch.no_grad():

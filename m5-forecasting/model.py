@@ -18,6 +18,28 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 
+class InequalityDual(nn.Module):
+  def __init__(self, in_features):
+    super(InequalityDual, self).__init__()
+    self.in_features = in_features
+    self.weight = nn.Parameter(torch.zeros(in_features))
+
+  def forward(self, x):
+    # Inequality dual variables are always positive
+    self.weight.data.clamp_(min=0.0)
+    return x * self.weight
+
+
+class EqualityDual(nn.Module):
+  def __init__(self, in_features):
+    super(EqualityDual, self).__init__()
+    self.in_features = in_features
+    self.weight = nn.Parameter(torch.zeros(in_features))
+
+  def forward(self, x):
+    return x * self.weight
+
+
 class RuleEncoder(nn.Module):
   def __init__(self, input_dim, output_dim, hidden_dim=4):
     super(RuleEncoder, self).__init__()
@@ -34,7 +56,7 @@ class RuleEncoder(nn.Module):
   def forward(self, x):
     return self.net(x)
 
-  
+
 class DataEncoder(nn.Module):
   def __init__(self, input_dim, output_dim, hidden_dim=4):
     super(DataEncoder, self).__init__()
@@ -64,10 +86,10 @@ class M5Net(nn.Module):
     self.net = nn.Sequential(nn.Linear(self.input_dim, hidden_dim),
                              nn.ReLU(),
                              nn.Linear(hidden_dim, 1))
-        
+
   def get_z(self, x, alpha=0.0):
     pass
-        
+
   def forward(self, x, alpha=0.0, merge='cat'):
     # merge: cat or add
     input_dense_cat = [x[self.name_to_ind['dense1']]]    # index 0 is 'dense1'
@@ -75,12 +97,12 @@ class M5Net(nn.Module):
 
     rule_z = self.rule_encoder(x)
     data_z = self.data_encoder(x)
-    
+
     if merge=='add':
       z = alpha*rule_z + (1-alpha)*data_z    # merge: Add
     elif merge=='cat':
       z = torch.cat((alpha*rule_z, (1-alpha)*data_z), dim=-1)    # merge: Concat
-    
+
     return self.net(z).squeeze()    # predict absolute values
 
 class Net(nn.Module):
@@ -91,7 +113,7 @@ class Net(nn.Module):
     self.activation = activation
     self.dense_dim = data_info['dense1']
     self.input_dim = self.dense_dim + emb_dim*(num_cat_features-1) + 3*emb_dim
-        
+
     self.net = nn.Sequential(nn.Linear(self.input_dim, 150),
                              self.activation,
                              nn.Linear(150, 75),
@@ -121,6 +143,3 @@ class Net(nn.Module):
 
     x = torch.cat(emb_out, dim=1)
     return self.net(x)
-    
-    
-    
