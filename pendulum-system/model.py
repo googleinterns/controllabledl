@@ -22,7 +22,7 @@ class InequalityDual(nn.Module):
   def __init__(self, in_features):
     super(InequalityDual, self).__init__()
     self.in_features = in_features
-    self.weight = nn.Parameter(torch.randn(in_features).abs_())
+    self.weight = nn.Parameter(torch.zeros(in_features))
 
   def forward(self, x):
     # Inequality dual variables are always positive
@@ -33,7 +33,7 @@ class EqualityDual(nn.Module):
   def __init__(self, in_features):
     super(EqualityDual, self).__init__()
     self.in_features = in_features
-    self.weight = nn.Parameter(torch.randn(in_features))
+    self.weight = nn.Parameter(torch.zeros(in_features))
 
   def forward(self, x):
     return x * self.weight
