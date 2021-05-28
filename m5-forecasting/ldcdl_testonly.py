@@ -46,6 +46,7 @@ def main():
   # train/test hyper parameters
   parser.add_argument('--datapath', type=str, default='data')
   parser.add_argument('--corr_threshold', type=float, default=-0.2)
+  parser.add_argument('--test_threshold', type=float, default=-0.1)
   parser.add_argument('--target_scaler', type=float, default=100.0)
   parser.add_argument('--device', type=str, default='cuda:0')
   parser.add_argument('--model_type', type=str, default='dataonly')
@@ -76,7 +77,8 @@ def main():
 
   datapath = args.datapath
   corr_threshold = args.corr_threshold
-  weekly_filename = 'week_diff_price_demand_corr{}.csv'.format(corr_threshold)
+  test_threshold = args.test_threshold
+  weekly_filename = 'week_diff_price_demand_corr{}.csv'.format(test_threshold)
 
   df_input = pd.read_csv(os.path.join(datapath, weekly_filename), index_col=0)
   df_input.head()
@@ -183,7 +185,7 @@ def main():
   best_train_ratio = 0.0
 
   # Training
-  for epoch in range(1, epochs+1):
+  for epoch in range(1, 1): # no training
     model.train()
     dual.train()
     train_loss_mae = 0

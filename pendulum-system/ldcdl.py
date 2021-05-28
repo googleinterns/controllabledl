@@ -65,6 +65,7 @@ def main():
   parser.add_argument('--early_stopping_thld', type=int, default=0, help='default: 0 (disabled)')
   parser.add_argument('--valid_freq', type=int, default=5, help='default: 5')
   parser.add_argument('--dual_lr', type=float, default=1.0, help='default: 1.0')
+  parser.add_argument('--file', type=str, default='')
 
   args = parser.parse_args()
   print(args)
@@ -134,7 +135,6 @@ def main():
   # Start
   lr = 0.001
   dual_lr = args.dual_lr
-  seed=42
 
   print('model_type: {}, lr: {}, dual_lr: {}, seed: {}'
         .format('ldcdl', lr, dual_lr, seed))
@@ -171,6 +171,9 @@ def main():
   loss_task_func = nn.L1Loss()    # return scalar (reduction=mean)
   l1_func = nn.L1Loss()
   best_val_task = float('inf')
+  best_val_ratio = 0.0
+  best_train_task = 0.0
+  best_train_ratio = 0.0
   optimizer = optim.Adam(model.parameters(), lr=lr)
   dual_optimizer = optim.SGD(dual.parameters(), lr=dual_lr)
 
@@ -243,6 +246,9 @@ def main():
           if val_loss_task < best_val_task:
             counter_early_stopping = 1
             best_val_task = val_loss_task
+            best_val_ratio = val_ratio
+            best_train_task = train_loss_task
+            best_train_ratio = train_ratio
             print('[Valid] Epoch: {} Loss(Task): {:.6f} Loss(Dual): {:.6f}  Ratio(Rule): {:.3f} (alpha: 0.0)\t best model is updated %%%%'
                   .format(epoch, val_loss_task, val_loss_dual, val_ratio))
             torch.save({
@@ -263,6 +269,10 @@ def main():
         else:
           print('[Valid] Epoch: {} Loss(Task): {:.6f} Loss(Dual): {:.6f}  Ratio(Rule): {:.3f} (alpha: 0.0)\t best model is updated %%%%'
                 .format(epoch, val_loss_task, val_loss_dual, val_ratio))
+          best_val_task = val_loss_task
+          best_val_ratio = val_ratio
+          best_train_task = train_loss_task
+          best_train_ratio = train_ratio
           torch.save({
             'epoch': epoch,
             'model_state_dict':model.state_dict(),
@@ -311,7 +321,10 @@ def main():
 
       print('Test set: Average loss: {:.8f} (alpha:{})'.format(test_loss_task, alpha))
       print("ratio of verified predictions: {:.6f} (alpha:{})".format(test_ratio, alpha))
-
+  if args.file != '':
+    ofd = open(args.file, 'a+')
+    ofd.write('{},{},{},{},{},{},{},{}\n'.format(seed, dual_lr, best_train_task, best_train_ratio, best_val_task, best_val_ratio, test_loss_task, test_ratio))
+    ofd.close()
 
 if __name__ == '__main__':
   main()
